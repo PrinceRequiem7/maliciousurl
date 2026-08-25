@@ -44,3 +44,4 @@ ipykernel>=6.29.5
 
 # --- Testing ---
 pytest>=8.3.3
+gunicorn==23.0.0
