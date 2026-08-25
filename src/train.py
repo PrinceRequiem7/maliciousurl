@@ -51,6 +51,9 @@ Design decisions
   and the pipeline logs a warning (not a hard abort — an in-progress fit
   is never killed mid-way) if cumulative elapsed time crosses it, so a
   run that is trending over budget is visible rather than silent.
+- **Memory-Efficient Serialization**: Persists model weights and scaler
+  with `compress=3` to keep disk footprint and unpickling memory low for
+  deployment on resource-constrained environments.
 - **No nested parallelism**: `RandomizedSearchCV` already parallelises
   across hyperparameter combinations x CV folds via `n_jobs=-1`. If the
   wrapped estimator (Random Forest, XGBoost) also parallelises
@@ -75,7 +78,7 @@ import pandas as pd
 from scipy.stats import randint, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
@@ -91,25 +94,17 @@ logger = get_logger(__name__)
 RANDOM_STATE = 42
 SCALED_MODELS = {"Logistic Regression", "Support Vector Machine"}
 
-# --- Time-budget-driven defaults (see module docstring) ---
-TIME_BUDGET_SECONDS = 2 * 60 * 60  # 2 hours — soft budget, logged against, never force-aborts a fit
-SVM_MAX_TRAIN_SAMPLES = 8_000  # reduced from 20,000: RBF-kernel SVM is the single biggest runtime risk
-SVM_MAX_ITER = 10_000  # hard cap on libsvm's internal iteration count per fit; without this, a
-# pathologically hard C/gamma combination can iterate for a very long time (sometimes appearing to
-# "hang") before ever converging. Capping it guarantees every single SVM fit terminates in bounded
-# time; a fit that hits the cap simply returns its best-so-far solution rather than the fully
-# converged one, which is a reasonable and explicitly logged trade-off at this dataset scale.
-CV_FOLDS = 3  # reduced from 5
-N_TUNING_ITER = 8  # reduced from 20 — RandomizedSearchCV iterations per tuned model
+# --- Time-budget and memory-driven defaults ---
+TIME_BUDGET_SECONDS = 2 * 60 * 60  # 2 hours — soft budget
+SVM_MAX_TRAIN_SAMPLES = 8_000
+SVM_MAX_ITER = 10_000
+CV_FOLDS = 3
+N_TUNING_ITER = 8
 
 
 class _TimeBudgetTracker:
     """Tracks cumulative wall-clock time against `TIME_BUDGET_SECONDS` and logs a
-    one-time warning if the run crosses it. Purely informational: it never
-    interrupts an in-progress fit, since killing a model mid-fit would leave
-    the pipeline in an inconsistent state. Its purpose is visibility — so a
-    run trending over budget is obvious in the logs well before it finishes,
-    rather than only discovered after the fact.
+    one-time warning if the run crosses it.
     """
 
     def __init__(self, budget_seconds: float) -> None:
@@ -151,15 +146,7 @@ class ModelResult:
 
 
 def load_or_build_features() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load processed train/test URL splits and build their feature matrices.
-
-    If `data/processed/train.csv` / `test.csv` do not yet exist, runs the
-    full preprocessing pipeline first (see `preprocessing.py`).
-
-    Returns:
-        Tuple of (train_feature_df, test_feature_df), each containing the
-        25 lexical feature columns plus the `label` column.
-    """
+    """Load processed train/test URL splits and build their feature matrices."""
     train_path = PROCESSED_DATA_DIR / "train.csv"
     test_path = PROCESSED_DATA_DIR / "test.csv"
 
@@ -191,48 +178,47 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray
 
 
 def get_baseline_models() -> dict[str, object]:
-    """Instantiate all five required models with sensible, documented defaults.
-
-    Returns:
-        Dict mapping model display name -> unfitted estimator instance.
-    """
+    """Instantiate all five required models with memory-optimized parameters."""
     return {
         "Logistic Regression": LogisticRegression(
             max_iter=1000, random_state=RANDOM_STATE
         ),
-        "Decision Tree": DecisionTreeClassifier(random_state=RANDOM_STATE),
+        "Decision Tree": DecisionTreeClassifier(
+            max_depth=16, min_samples_leaf=2, random_state=RANDOM_STATE
+        ),
         "Random Forest": RandomForestClassifier(
-            n_estimators=150, random_state=RANDOM_STATE, n_jobs=-1
+            n_estimators=100,
+            max_depth=16,
+            min_samples_leaf=2,
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
         ),
         "Support Vector Machine": SVC(
             kernel="rbf",
             probability=True,
             random_state=RANDOM_STATE,
-            max_iter=SVM_MAX_ITER,  # hard cap so a single fit can never run unbounded — see module docstring
+            max_iter=SVM_MAX_ITER,
         ),
         "XGBoost": XGBClassifier(
+            n_estimators=100,
+            max_depth=6,
             random_state=RANDOM_STATE,
             eval_metric="logloss",
             n_jobs=-1,
-            tree_method="hist",  # much faster than the default exact-greedy method at this dataset scale
+            tree_method="hist",
         ),
     }
 
 
 def get_param_distributions() -> dict[str, dict]:
-    """Hyperparameter search spaces for the three tuned models.
-
-    Returns:
-        Dict mapping model display name -> param distribution dict
-        suitable for `RandomizedSearchCV(param_distributions=...)`.
-    """
+    """Hyperparameter search spaces for the three tuned models."""
     return {
         "Random Forest": {
-            "n_estimators": randint(100, 300),  # trimmed from (100, 500) — fewer trees per fit
-            "max_depth": randint(5, 25),  # trimmed from (5, 40) — shallower trees per fit
-            "min_samples_split": randint(2, 20),
-            "min_samples_leaf": randint(1, 10),
-            "max_features": ["sqrt", "log2", None],
+            "n_estimators": randint(60, 120),
+            "max_depth": randint(10, 20),
+            "min_samples_split": randint(2, 10),
+            "min_samples_leaf": randint(1, 6),
+            "max_features": ["sqrt", "log2"],
         },
         "Support Vector Machine": {
             "C": uniform(0.1, 10),
@@ -240,9 +226,9 @@ def get_param_distributions() -> dict[str, dict]:
             "kernel": ["rbf", "linear"],
         },
         "XGBoost": {
-            "n_estimators": randint(100, 300),  # trimmed from (100, 500)
-            "max_depth": randint(3, 10),  # trimmed from (3, 12)
-            "learning_rate": uniform(0.01, 0.3),
+            "n_estimators": randint(60, 120),
+            "max_depth": randint(3, 8),
+            "learning_rate": uniform(0.01, 0.25),
             "subsample": uniform(0.6, 0.4),
             "colsample_bytree": uniform(0.6, 0.4),
         },
@@ -252,11 +238,7 @@ def get_param_distributions() -> dict[str, dict]:
 def _prepare_training_subset(
     model_name: str, X_train: pd.DataFrame, y_train: pd.Series
 ) -> tuple[pd.DataFrame, pd.Series]:
-    """Return the (possibly subsampled) training data a given model should use.
-
-    Only SVM is subsampled, and only if the training set exceeds
-    `SVM_MAX_TRAIN_SAMPLES`. See module docstring for the rationale.
-    """
+    """Return the (possibly subsampled) training data a given model should use."""
     if model_name != "Support Vector Machine" or len(X_train) <= SVM_MAX_TRAIN_SAMPLES:
         return X_train, y_train
 
@@ -285,23 +267,7 @@ def train_all_baseline_models(
     scaler: StandardScaler,
     budget: Optional[_TimeBudgetTracker] = None,
 ) -> dict[str, ModelResult]:
-    """Train all five baseline models under identical conditions.
-
-    Args:
-        X_train: Unscaled training feature matrix.
-        y_train: Training labels.
-        X_test: Unscaled test feature matrix.
-        y_test: Test labels.
-        scaler: A `StandardScaler` already fit on `X_train`, applied only
-            to models in `SCALED_MODELS`.
-        budget: Optional time-budget tracker; logs cumulative elapsed
-            time after each model finishes if provided.
-
-    Returns:
-        Dict mapping model name -> ModelResult with fitted model and
-        test-set metrics (used for reporting; NOT used for model
-        selection — see `select_best_model`).
-    """
+    """Train all five baseline models under identical conditions."""
     results: dict[str, ModelResult] = {}
     models = get_baseline_models()
     X_train_scaled = scaler.transform(X_train)
@@ -348,24 +314,7 @@ def tune_models(
     scaler: StandardScaler,
     budget: Optional[_TimeBudgetTracker] = None,
 ) -> dict[str, ModelResult]:
-    """Hyperparameter-tune Random Forest, SVM, and XGBoost via RandomizedSearchCV.
-
-    For each tuned model, reports best parameters, training/search time,
-    and validation (CV) score, per project specification, then refits on
-    the (possibly subsampled, for SVM) training data and evaluates on the
-    held-out test set for reporting purposes.
-
-    Args:
-        X_train: Unscaled training feature matrix.
-        y_train: Training labels.
-        X_test: Unscaled test feature matrix.
-        y_test: Test labels.
-        scaler: `StandardScaler` fit on `X_train`.
-
-    Returns:
-        Dict mapping model name -> ModelResult, including `best_params`
-        and cross-validated F1 mean/std from the search.
-    """
+    """Hyperparameter-tune Random Forest, SVM, and XGBoost via RandomizedSearchCV."""
     base_models = get_baseline_models()
     param_distributions = get_param_distributions()
     results: dict[str, ModelResult] = {}
@@ -374,15 +323,6 @@ def tune_models(
         logger.info("Tuning model: %s", name)
         base_estimator = base_models[name]
 
-        # Critical fix: RandomizedSearchCV already parallelises across
-        # hyperparameter combinations x CV folds via n_jobs=-1 below. If the
-        # wrapped estimator ALSO parallelises internally (RandomForest and
-        # XGBoost both default to n_jobs=-1 in get_baseline_models()), every
-        # search worker spawns its own full set of threads, oversubscribing
-        # the CPU many times over. This is the single most common cause of
-        # a RandomizedSearchCV run appearing to hang or take far longer than
-        # it should. Force the inner estimator to single-threaded here so
-        # only the outer search parallelises.
         if hasattr(base_estimator, "n_jobs"):
             base_estimator.set_params(n_jobs=1)
 
@@ -399,7 +339,7 @@ def tune_models(
             cv=StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE),
             random_state=RANDOM_STATE,
             n_jobs=-1,
-            verbose=2,  # prints a line per fit so progress is visible rather than appearing frozen
+            verbose=2,
         )
 
         with Timer(f"{name} hyperparameter search") as timer:
@@ -437,23 +377,7 @@ def tune_models(
 
 
 def select_best_model(all_results: dict[str, ModelResult]) -> ModelResult:
-    """Select the best model: highest test F1-score, ROC-AUC as tiebreaker.
-
-    Per project specification: "Select the best model using F1-score
-    first and ROC-AUC second." Test-set metrics (rather than CV metrics)
-    are used here for the final head-to-head comparison across ALL five
-    models (tuned and untuned), since the tuned models' CV scores are not
-    directly comparable to untuned models' CV scores under a different
-    tuning regime — the shared, identical test set is the fair common
-    ground for the final selection.
-
-    Args:
-        all_results: Dict mapping model name -> ModelResult, for every
-            trained model (baseline + tuned versions).
-
-    Returns:
-        The winning ModelResult.
-    """
+    """Select the best model: highest test F1-score, ROC-AUC as tiebreaker."""
     ranked = sorted(
         all_results.values(),
         key=lambda r: (r.metrics["f1"], r.metrics["roc_auc"]),
@@ -471,23 +395,20 @@ def select_best_model(all_results: dict[str, ModelResult]) -> ModelResult:
 def save_artifacts(
     winner: ModelResult, scaler: StandardScaler, all_results: dict[str, ModelResult]
 ) -> None:
-    """Persist the winning model, scaler, feature order, and comparison table.
+    """Persist the winning model, scaler, feature order, and comparison table with compression."""
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
-    Args:
-        winner: The selected best ModelResult.
-        scaler: The `StandardScaler` fit on the training data (persisted
-            regardless of whether the winning model needs it, so
-            `predict.py` can decide consistently at load time).
-        all_results: All trained models' results, for the comparison table.
-    """
     model_path = MODELS_DIR / "best_model.pkl"
     scaler_path = MODELS_DIR / "scaler.pkl"
     feature_names_path = MODELS_DIR / "feature_names.json"
     metadata_path = MODELS_DIR / "best_model_metadata.json"
     comparison_path = METRICS_DIR / "model_comparison.csv"
 
-    joblib.dump(winner.model, model_path)
-    joblib.dump(scaler, scaler_path)
+    # Save serialized artifacts using compress=3 for lightweight footprint
+    joblib.dump(winner.model, model_path, compress=3)
+    joblib.dump(scaler, scaler_path, compress=3)
+
     with open(feature_names_path, "w", encoding="utf-8") as f:
         json.dump(list(FEATURE_NAMES), f, indent=2)
 
@@ -511,26 +432,15 @@ def save_artifacts(
     ]
     comparison_df.to_csv(comparison_path)
 
-    logger.info("Saved best model to %s", model_path)
-    logger.info("Saved scaler to %s", scaler_path)
+    logger.info("Saved compressed best model to %s", model_path)
+    logger.info("Saved compressed scaler to %s", scaler_path)
     logger.info("Saved feature names to %s", feature_names_path)
     logger.info("Saved best model metadata to %s", metadata_path)
     logger.info("Saved model comparison table to %s", comparison_path)
 
 
 def run_training_pipeline() -> ModelResult:
-    """Run the full training pipeline end to end.
-
-    1. Load/build features.
-    2. Fit scaler on training data only.
-    3. Train all 5 baseline models.
-    4. Tune Random Forest, SVM, XGBoost.
-    5. Select the best model (tuned version replaces baseline where tuned).
-    6. Persist model, scaler, feature names, and comparison table.
-
-    Returns:
-        The winning ModelResult.
-    """
+    """Run the full training pipeline end to end."""
     train_features, test_features = load_or_build_features()
     X_train = train_features[list(FEATURE_NAMES)]
     y_train = train_features["label"]
@@ -538,7 +448,7 @@ def run_training_pipeline() -> ModelResult:
     y_test = test_features["label"]
 
     scaler = StandardScaler()
-    scaler.fit(X_train)  # fit on training data ONLY — see module docstring
+    scaler.fit(X_train)
 
     budget = _TimeBudgetTracker(TIME_BUDGET_SECONDS)
     logger.info(
@@ -554,10 +464,6 @@ def run_training_pipeline() -> ModelResult:
     baseline_results = train_all_baseline_models(X_train, y_train, X_test, y_test, scaler, budget=budget)
     tuned_results = tune_models(X_train, y_train, X_test, y_test, scaler, budget=budget)
 
-    # Tuned versions supersede their baseline counterpart in the final
-    # comparison (we keep the untuned Logistic Regression and Decision
-    # Tree results as-is, since they were not in scope for tuning per
-    # the project specification).
     all_results = {**baseline_results, **tuned_results}
 
     winner = select_best_model(all_results)
