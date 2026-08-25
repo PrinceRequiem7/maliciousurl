@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Malicious URL Flagger Homepage{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card shadow-sm border-0">
+            <div class="card-body p-4 p-md-5">
+                <h1 class="h3 mb-2">Check a URL</h1>
+                <p class="text-muted mb-4">
+                    Paste a URL in the box below to classify it as <strong>Safe</strong> or
+                    <strong>Malicious</strong> using a well trained machine learning model.
+                </p>
+
+                {% if error %}
+                <div class="alert alert-danger" role="alert">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <form action="{{ url_for('analyze') }}" method="post" novalidate>
+                    <div class="mb-3">
+                        <label for="url" class="form-label">URL</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-lg"
+                            id="url"
+                            name="url"
+                            placeholder="e.g. example.com or https://example.com/path"
+                            value="{{ previous_url or '' }}"
+                            autofocus
+                            required
+                        >
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-lg w-100">
+                        Analyze
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <p class="text-muted small mt-3 text-center">
+            This tool uses lexical URL characteristics only. It does not visit the URL or perform DNS/WHOIS lookups.
+        </p>
+    </div>
+</div>
+{% endblock %}

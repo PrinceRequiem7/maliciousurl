@@ -1,0 +1,11 @@
+Classification Report — Random Forest
+============================================================
+
+              precision    recall  f1-score   support
+
+        Safe       0.94      0.96      0.95     86650
+   Malicious       0.92      0.87      0.89     41574
+
+    accuracy                           0.93    128224
+   macro avg       0.93      0.92      0.92    128224
+weighted avg       0.93      0.93      0.93    128224

@@ -1,0 +1,21 @@
+# Python virtual environment & cache
+venv/
+__pycache__/
+*.pyc
+
+# Heavy data files
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Heavy serialized ML artifacts
+models/*.pkl
+models/*.joblib
+
+# Keep metadata in git
+!models/feature_names.json
+!models/best_model_metadata.json
+
+# Environment files
+.env

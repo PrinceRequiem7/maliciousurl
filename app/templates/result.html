@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Analysis Result — Malicious URL Flagger{% endblock %}
+
+{% block content %}
+{% set risk_class = {
+    'Low': 'success',
+    'Medium': 'warning',
+    'High': 'warning',
+    'Critical': 'danger'
+} %}
+{% set verdict_class = 'danger' if result.prediction == 'Malicious' else 'success' %}
+
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-body p-4 p-md-5">
+                <p class="text-muted mb-1 text-break">{{ result.url }}</p>
+
+                <div class="d-flex align-items-center gap-3 mb-4">
+                    <span class="badge bg-{{ verdict_class }} fs-4 px-3 py-2">
+                        {{ result.prediction }}
+                    </span>
+                    <span class="badge bg-{{ risk_class[result.risk_level] }} fs-6 px-3 py-2">
+                        Risk: {{ result.risk_level }}
+                    </span>
+                </div>
+
+                <div class="row g-3 mb-4">
+                    <div class="col-sm-4">
+                        <div class="border rounded p-3 text-center h-100">
+                            <div class="text-muted small">Confidence</div>
+                            <div class="fs-4 fw-semibold">{{ "%.1f"|format(result.confidence * 100) }}%</div>
+                        </div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="border rounded p-3 text-center h-100">
+                            <div class="text-muted small">P(Safe)</div>
+                            <div class="fs-4 fw-semibold text-success">{{ "%.1f"|format(result.probability_safe * 100) }}%</div>
+                        </div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="border rounded p-3 text-center h-100">
+                            <div class="text-muted small">P(Malicious)</div>
+                            <div class="fs-4 fw-semibold text-danger">{{ "%.1f"|format(result.probability_malicious * 100) }}%</div>
+                        </div>
+                    </div>
+                </div>
+
+                <h2 class="h5 mb-3">Top Contributing Features</h2>
+                {% if result.top_contributing_features %}
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th scope="col">Feature</th>
+                            <th scope="col">Value</th>
+                            <th scope="col">Impact</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in result.top_contributing_features %}
+                        <tr>
+                            <td><code>{{ item.feature }}</code></td>
+                            <td>{{ item.value }}</td>
+                            <td>
+                                <span class="badge bg-{{ 'danger' if item.impact > 0 else 'success' }}-subtle text-{{ 'danger' if item.impact > 0 else 'success' }}">
+                                    {{ "%.4f"|format(item.impact) }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <p class="text-muted small">
+                    Positive impact pushes the prediction toward Malicious; negative impact pushes it toward Safe.
+                </p>
+                {% else %}
+                <p class="text-muted">No feature-level breakdown is available for this model type.</p>
+                {% endif %}
+
+                <p class="text-muted small mb-0">Model used: {{ result.model_name }}</p>
+            </div>
+        </div>
+
+        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Analyze another URL</a>
+    </div>
+</div>
+{% endblock %}

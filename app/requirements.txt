@@ -1,0 +1,20 @@
+# ==============================================================================
+# malicious_url_detector/app — requirements.txt
+# Lightweight subset for running the Flask web application only.
+#
+# Note: scikit-learn and xgboost are included (not just "flask") because
+# unpickling the persisted model/scaler (models/best_model.pkl,
+# models/scaler.pkl) requires the same libraries that created them,
+# regardless of which of the 5 candidate models won during training.
+#
+# Install with:
+#   pip install -r app/requirements.txt
+# ==============================================================================
+
+flask==3.0.3
+joblib==1.4.2
+numpy==2.1.3
+pandas==2.2.3
+scikit-learn==1.5.2
+xgboost==2.1.2
+tldextract==5.1.2

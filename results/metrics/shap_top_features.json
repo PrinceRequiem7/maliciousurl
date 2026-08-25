@@ -1,0 +1,102 @@
+[
+  {
+    "feature": "num_dots",
+    "mean_abs_shap": 0.10704212235304741
+  },
+  {
+    "feature": "num_subdomains",
+    "mean_abs_shap": 0.08295371250384238
+  },
+  {
+    "feature": "path_length",
+    "mean_abs_shap": 0.06912062069284582
+  },
+  {
+    "feature": "domain_length",
+    "mean_abs_shap": 0.03368838569629362
+  },
+  {
+    "feature": "num_slashes",
+    "mean_abs_shap": 0.02590066980343913
+  },
+  {
+    "feature": "digit_ratio",
+    "mean_abs_shap": 0.023521523779466334
+  },
+  {
+    "feature": "url_length",
+    "mean_abs_shap": 0.022679446217390625
+  },
+  {
+    "feature": "domain_entropy",
+    "mean_abs_shap": 0.01984922913226311
+  },
+  {
+    "feature": "num_ampersands",
+    "mean_abs_shap": 0.019254067923134718
+  },
+  {
+    "feature": "num_underscores",
+    "mean_abs_shap": 0.017323278654102214
+  },
+  {
+    "feature": "has_https",
+    "mean_abs_shap": 0.01652213171073975
+  },
+  {
+    "feature": "num_equal_signs",
+    "mean_abs_shap": 0.0164707388362624
+  },
+  {
+    "feature": "num_digits",
+    "mean_abs_shap": 0.01587090674355418
+  },
+  {
+    "feature": "url_entropy",
+    "mean_abs_shap": 0.014605602369285537
+  },
+  {
+    "feature": "special_char_ratio",
+    "mean_abs_shap": 0.014118593910181465
+  },
+  {
+    "feature": "has_http",
+    "mean_abs_shap": 0.013974775322391435
+  },
+  {
+    "feature": "query_length",
+    "mean_abs_shap": 0.013854377853679269
+  },
+  {
+    "feature": "suspicious_keyword_count",
+    "mean_abs_shap": 0.011106978822512197
+  },
+  {
+    "feature": "has_ip_address",
+    "mean_abs_shap": 0.010337749717367468
+  },
+  {
+    "feature": "num_letters",
+    "mean_abs_shap": 0.008582453220170509
+  },
+  {
+    "feature": "num_hyphens",
+    "mean_abs_shap": 0.00852283248498613
+  },
+  {
+    "feature": "letter_ratio",
+    "mean_abs_shap": 0.006925464949612055
+  },
+  {
+    "feature": "num_question_marks",
+    "mean_abs_shap": 0.000680366441576877
+  },
+  {
+    "feature": "num_at_symbols",
+    "mean_abs_shap": 0.00020958198538100395
+  },
+  {
+    "feature": "num_exclamation_marks",
+    "mean_abs_shap": 3.339578327845548e-06
+  }
+]

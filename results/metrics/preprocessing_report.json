@@ -1,0 +1,13 @@
+{
+  "raw_row_count": 651191,
+  "duplicate_rows_removed": 10072,
+  "missing_value_rows_removed": 0,
+  "unmapped_label_rows_removed": 0,
+  "final_row_count": 641119,
+  "class_balance": {
+    "Safe": 428080,
+    "Malicious": 213039
+  },
+  "train_row_count": 512895,
+  "test_row_count": 128224
+}
