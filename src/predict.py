@@ -9,6 +9,8 @@ Exposes `predict_url`, `ModelBundle`, `_ModelBundle`, and `_risk_level_for`.
 from __future__ import annotations
 
 import json
+import os
+import urllib.request
 import warnings
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
@@ -80,17 +82,44 @@ class PredictionResult:
 
 
 class ModelBundle:
-    """Singleton loader for persisted model artifacts."""
+    """Singleton loader for persisted model artifacts with remote-fetch fallback."""
     _instance: ModelBundle | None = None
 
     def __init__(self) -> None:
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
         model_path = MODELS_DIR / "best_model.pkl"
         scaler_path = MODELS_DIR / "scaler.pkl"
         feature_names_path = MODELS_DIR / "feature_names.json"
         metadata_path = MODELS_DIR / "best_model_metadata.json"
 
+        # 1. Download model weights if missing (e.g. deployed on Render ephemeral storage)
+        model_url = os.getenv("MODEL_URL")
         if not model_path.exists():
-            raise FileNotFoundError(f"Model artifact not found at {model_path}. Run training first.")
+            if model_url:
+                logger.info("Downloading best_model.pkl from %s...", model_url)
+                try:
+                    urllib.request.urlretrieve(model_url, model_path)
+                    logger.info("Successfully downloaded best_model.pkl.")
+                except Exception as e:
+                    logger.error("Failed to download model from %s: %s", model_url, e)
+                    raise FileNotFoundError(
+                        f"Failed to fetch model from MODEL_URL: {e}"
+                    ) from e
+            else:
+                raise FileNotFoundError(
+                    f"Model artifact not found at {model_path}. Set MODEL_URL env "
+                    "var or run training locally first."
+                )
+
+        # 2. Download scaler if missing and URL is specified
+        scaler_url = os.getenv("SCALER_URL")
+        if not scaler_path.exists() and scaler_url:
+            logger.info("Downloading scaler.pkl from %s...", scaler_url)
+            try:
+                urllib.request.urlretrieve(scaler_url, scaler_path)
+                logger.info("Successfully downloaded scaler.pkl.")
+            except Exception as e:
+                logger.warning("Could not download scaler.pkl from %s: %s", scaler_url, e)
 
         self.model = joblib.load(model_path)
         self.scaler = joblib.load(scaler_path) if scaler_path.exists() else None
@@ -101,18 +130,6 @@ class ModelBundle:
         else:
             self.feature_names = list(FEATURE_NAMES)
 
-        # --- FIX: read whether THIS SPECIFIC model actually needs scaled
-        # input, instead of inferring it from whether scaler.pkl merely
-        # exists on disk. train.py always writes scaler.pkl regardless of
-        # which of the 5 candidate models wins (it's needed for Logistic
-        # Regression / SVM but harmless to save even when the winner is a
-        # tree-based model), so "self.scaler is not None" is ALWAYS true
-        # and is not a valid signal for whether to apply it. The previous
-        # version of this class didn't read uses_scaling at all, which
-        # meant every prediction silently ran features through a
-        # StandardScaler even when the winning model (e.g. Random Forest)
-        # was trained on raw, unscaled features -- corrupting every single
-        # prediction without any error or warning.
         self.uses_scaling = False
         self.model_name = "RandomForest"
         if metadata_path.exists():
@@ -124,16 +141,13 @@ class ModelBundle:
                 else:
                     logger.warning(
                         "'uses_scaling' not found in best_model_metadata.json; "
-                        "defaulting to False (no scaling applied). If '%s' actually "
-                        "requires scaled input, predictions will be wrong. Re-run "
-                        "training to regenerate metadata with this field.",
+                        "defaulting to False. If '%s' requires scaled input, "
+                        "re-train to regenerate metadata.",
                         self.model_name,
                     )
         else:
             logger.warning(
-                "best_model_metadata.json not found; defaulting uses_scaling=False. "
-                "If the loaded model actually requires scaled input, predictions "
-                "will be wrong."
+                "best_model_metadata.json not found; defaulting uses_scaling=False."
             )
 
     @classmethod
@@ -164,12 +178,9 @@ def predict_url(raw_url: str) -> PredictionResult:
     if not cleaned_url or not is_valid_url(cleaned_url):
         raise ValueError(f"Invalid or malformed URL: {raw_url!r}")
 
-    # 0. Trusted-domain allowlist check -- see src/allowlist.py for the full
-    # rationale. Runs BEFORE any feature extraction or model inference, and
-    # is fully transparent: the returned model_name makes it explicit that
-    # this result bypassed the trained classifier entirely.
+    # 0. Trusted-domain allowlist check
     if is_trusted_domain(cleaned_url):
-        logger.info("'%s' matched the trusted-domain allowlist; bypassing model.", cleaned_url)
+        logger.info("'%s' matched trusted-domain allowlist; bypassing model.", cleaned_url)
         return PredictionResult(
             url=raw_url,
             prediction="Safe",
@@ -197,9 +208,6 @@ def predict_url(raw_url: str) -> PredictionResult:
     # 4. Model Inference & Scaling
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        # --- FIX: gate scaling on bundle.uses_scaling, not merely on
-        # whether a scaler object happens to be loaded. See the comment
-        # in ModelBundle.__init__ for why "scaler is not None" was wrong.
         if bundle.uses_scaling and bundle.scaler is not None:
             scaled_array = bundle.scaler.transform(df_features)
             X = pd.DataFrame(scaled_array, columns=bundle.feature_names)
@@ -220,17 +228,6 @@ def predict_url(raw_url: str) -> PredictionResult:
     risk_level = _risk_level_for(prob_malicious)
 
     # 5. Extract top feature contributions
-    # --- FIX: the previous version ranked and reported ONLY
-    # bundle.model.feature_importances_ -- a GLOBAL, model-wide ranking
-    # that is identical for every single prediction regardless of that
-    # URL's actual feature values (this is why, in the earlier diagnostic
-    # output, "impact" for num_dots was exactly +0.2427 for every URL
-    # even though num_dots itself varied between them). Multiplying each
-    # feature's global importance by that URL's OWN value turns this into
-    # a real (if approximate) per-instance explanation: a feature the
-    # model considers important AND that has an unusual value for this
-    # specific URL will now correctly rank higher than one that's
-    # "important in general" but unremarkable for this particular input.
     top_features: List[Dict[str, Any]] = []
     if hasattr(bundle.model, "feature_importances_"):
         importances = bundle.model.feature_importances_
